@@ -225,3 +225,6 @@ router.get('/:type/*', async (req, res) => {
 });
 
 module.exports = router;
+
+// Auto-sync static template list on startup for robustness
+rebuildStaticTemplateList().catch(err => console.error('[Init] Static sync failed:', err.message));
