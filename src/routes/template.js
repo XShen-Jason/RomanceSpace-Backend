@@ -109,75 +109,118 @@ router.post('/upload', requireAdmin, upload.any(), async (req, res) => {
 });
 
 // ── POST /api/template/sync-local ─────────────────────────────────────────────
-// Admin only: Scans the local filesystem and pushes all templates to R2/KV.
+// Admin only: Syncs templates from either local filesystem or GitHub Repo.
 router.post('/sync-local', requireAdmin, async (req, res) => {
     try {
-        const templatesRoot = path.join(__dirname, '../../../RomanceSpace-Templates/src');
-        if (!fs.existsSync(templatesRoot)) {
-            return res.status(404).json({ error: `Templates source directory not found at ${templatesRoot}` });
-        }
-
-        const dirs = fs.readdirSync(templatesRoot, { withFileTypes: true })
-            .filter(d => d.isDirectory())
-            .map(d => d.name);
+        const repoOwner = process.env.TEMPLATES_REPO_OWNER;
+        const repoName = process.env.TEMPLATES_REPO_NAME;
+        const localPath = process.env.TEMPLATES_LOCAL_PATH || path.join(__dirname, '../../../RomanceSpace-Templates/src');
 
         const results = [];
-        for (const name of dirs) {
-            const dirPath = path.join(templatesRoot, name);
-            const indexHtml = path.join(dirPath, 'index.html');
-            if (!fs.existsSync(indexHtml)) continue;
+        
+        // --- Option A: Sync from GitHub (Recommended if VPS has no code) ---
+        if (repoOwner && repoName) {
+            console.log(`[sync] Fetching from GitHub: ${repoOwner}/${repoName}...`);
+            const baseUrl = `https://api.github.com/repos/${repoOwner}/${repoName}/contents/src`;
+            const ghHeaders = { 'User-Agent': 'RomanceSpace-Backend' };
+            if (process.env.GITHUB_TOKEN) ghHeaders['Authorization'] = `token ${process.env.GITHUB_TOKEN}`;
 
-            const version = makeVersion();
+            const repoRes = await fetch(baseUrl, { headers: ghHeaders });
+            if (!repoRes.ok) throw new Error(`GitHub API failed: ${repoRes.statusText}`);
             
-            // Collect files in this template
-            const files = [];
-            const walk = (d, rel = '') => {
-                const entries = fs.readdirSync(d, { withFileTypes: true });
-                for (const e of entries) {
-                    const r = rel ? `${rel}/${e.name}` : e.name;
-                    const p = path.join(d, e.name);
-                    if (e.isDirectory()) walk(p, r);
-                    else files.push({ rel: r, path: p });
+            const contents = await repoRes.json();
+            const folders = contents.filter(c => c.type === 'dir').map(c => c.name);
+
+            for (const name of folders) {
+                const version = makeVersion();
+                const filesUrl = `${baseUrl}/${name}`;
+                const filesRes = await fetch(filesUrl, { headers: ghHeaders });
+                const filesData = await filesRes.json();
+                
+                // Track files for this template
+                const uploadedFiles = [];
+                let configJson = null;
+
+                for (const fileRecord of filesData) {
+                    if (fileRecord.type === 'file') {
+                        const fileContentRes = await fetch(fileRecord.download_url);
+                        const content = Buffer.from(await fileContentRes.arrayBuffer());
+                        
+                        // Upload to R2
+                        const { getMime } = require('../utils/mime');
+                        await r2Put(`templates/${name}/${version}/${fileRecord.name}`, content, getMime(fileRecord.name));
+                        uploadedFiles.push(fileRecord.name);
+
+                        if (fileRecord.name === 'config.json' || fileRecord.name === 'schema.json') {
+                            configJson = JSON.parse(content.toString('utf-8'));
+                        }
+                    }
                 }
-            };
-            walk(dirPath);
 
-            // Upload to R2
-            for (const f of files) {
-                const content = fs.readFileSync(f.path);
-                const r2Key = `templates/${name}/${version}/${f.rel}`;
-                const { getMime } = require('../utils/mime');
-                await r2Put(r2Key, content, getMime(f.rel));
+                if (!uploadedFiles.includes('index.html')) continue;
+
+                const fields = configJson?.fields ?? [];
+                const isStatic = configJson?.static === true || fields.length === 0;
+
+                await kvPut(`__tmpl__${name}`, {
+                    name, version, fields, static: isStatic, updatedAt: new Date().toISOString()
+                });
+                results.push({ name, version, source: 'github' });
             }
+        } 
+        // --- Option B: Fallback to Local Filesystem ---
+        else if (fs.existsSync(localPath)) {
+            console.log(`[sync] Fetching from Local: ${localPath}...`);
+            const dirs = fs.readdirSync(localPath, { withFileTypes: true })
+                .filter(d => d.isDirectory())
+                .map(d => d.name);
 
-            // Parse Meta
-            let fields = [];
-            let isStatic = true;
-            const metaPath = [path.join(dirPath, 'config.json'), path.join(dirPath, 'schema.json')]
-                .find(p => fs.existsSync(p));
-            
-            if (metaPath) {
-                const schema = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
-                fields = schema.fields ?? [];
-                isStatic = schema.static === true || fields.length === 0;
+            for (const name of dirs) {
+                const dirPath = path.join(localPath, name);
+                const indexHtml = path.join(dirPath, 'index.html');
+                if (!fs.existsSync(indexHtml)) continue;
+
+                const version = makeVersion();
+                const files = [];
+                const walk = (d, rel = '') => {
+                    const entries = fs.readdirSync(d, { withFileTypes: true });
+                    for (const e of entries) {
+                        const r = rel ? `${rel}/${e.name}` : e.name;
+                        const p = path.join(d, e.name);
+                        if (e.isDirectory()) walk(p, r);
+                        else files.push({ rel: r, path: p });
+                    }
+                };
+                walk(dirPath);
+
+                for (const f of files) {
+                    const content = fs.readFileSync(f.path);
+                    const { getMime } = require('../utils/mime');
+                    await r2Put(`templates/${name}/${version}/${f.rel}`, content, getMime(f.rel));
+                }
+
+                let configJson = null;
+                const metaPath = [path.join(dirPath, 'config.json'), path.join(dirPath, 'schema.json')].find(p => fs.existsSync(p));
+                if (metaPath) configJson = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+
+                const fields = configJson?.fields ?? [];
+                const isStatic = configJson?.static === true || fields.length === 0;
+
+                await kvPut(`__tmpl__${name}`, {
+                    name, version, fields, static: isStatic, updatedAt: new Date().toISOString()
+                });
+                results.push({ name, version, source: 'local' });
             }
-
-            // Update KV
-            await kvPut(`__tmpl__${name}`, {
-                name,
-                version,
-                fields,
-                static: isStatic,
-                updatedAt: new Date().toISOString(),
+        } 
+        else {
+            return res.status(404).json({ 
+                error: '未找到模板源', 
+                message: '请在 .env 中设置 TEMPLATES_REPO_OWNER/NAME (GitHub 模式) 或确保 VPS 上存在模板文件夹。' 
             });
-
-            results.push({ name, version, files: files.length });
         }
 
-        // Invalidate cache
         cachedTemplates = null;
         await rebuildStaticTemplateList();
-
         return res.json({ success: true, count: results.length, details: results });
     } catch (err) {
         console.error('[template/sync-local]', err);
