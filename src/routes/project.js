@@ -19,10 +19,10 @@ let memoryBlocklist = [];
 let blocklistLoaded = false;
 
 let memoryQuotas = {
-    'free': 1,
-    'pro': 5,
-    'partner': 10,
-    'admin': 999
+    'free': { limit: 1, dailyLimit: 5, label: '🌟 体验用户' },
+    'pro': { limit: 5, dailyLimit: 20, label: '💎 高级会员' },
+    'partner': { limit: 10, dailyLimit: 50, label: '👑 终身合伙人' },
+    'admin': { limit: 999, dailyLimit: 999, label: '🛡️ 系统管理员' }
 };
 let quotasLoaded = false;
 
@@ -31,7 +31,14 @@ async function ensureQuotas() {
         try {
             const list = await kvGet('__sys__quotas');
             if (list && typeof list === 'object') {
-                memoryQuotas = { ...memoryQuotas, ...list };
+                // Merge KV values, supporting both simple numbers and {limit, label} objects
+                for (const key in list) {
+                    if (typeof list[key] === 'number') {
+                        memoryQuotas[key] = { ...memoryQuotas[key], limit: list[key] };
+                    } else if (typeof list[key] === 'object') {
+                        memoryQuotas[key] = { ...memoryQuotas[key], ...list[key] };
+                    }
+                }
             }
             quotasLoaded = true;
             console.log('[Quotas] Initial loaded from KV:', Object.keys(memoryQuotas).length, 'tiers');
@@ -85,7 +92,25 @@ async function validateAndCheckQuota(userId, subdomain) {
             return { isValid: false, code: 4010, message: '该域名前缀已被他人抢先使用，请更换试试哦' };
         }
         // It's their domain = Update Scenario (A-2 / A-3)
-        return { isValid: true, mode: 'UPDATE' };
+        // Check Daily Edit Quota
+        const { data: profile } = await supabase.from('profiles').select('tier, daily_edit_count, last_edit_date').eq('id', userId).maybeSingle();
+        const tier = profile?.tier || 'free';
+        const today = new Date().toISOString().split('T')[0];
+        
+        await ensureQuotas();
+        const tierConfig = memoryQuotas[tier] || memoryQuotas['free'];
+        const maxDailyEdits = tierConfig?.dailyLimit || 5; // Default 5 for free
+        
+        let dailyCount = profile?.daily_edit_count || 0;
+        if (profile?.last_edit_date !== today) {
+            dailyCount = 0; // Reset for new day
+        }
+        
+        if (dailyCount >= maxDailyEdits) {
+            return { isValid: false, code: 4022, message: `今日修改次数已达上限 (${maxDailyEdits}次)，请明天再试或升级等级哦` };
+        }
+        
+        return { isValid: true, mode: 'UPDATE', dailyCount, today };
     } else {
         // Domain is not taken = Create Scenario (A-1)
         
@@ -111,13 +136,14 @@ async function validateAndCheckQuota(userId, subdomain) {
         // 3. Define and check quota mapping
         await ensureQuotas();
         
-        const maxDomains = memoryQuotas[tier] || memoryQuotas['free'] || 1;
+        const tierConfig = memoryQuotas[tier] || memoryQuotas['free'];
+        const maxDomains = tierConfig?.limit || 1;
         
         if (count >= maxDomains) {
             return { 
                 isValid: false, 
                 code: 4030, 
-                message: `您的当前等级 (${tier}) 域名额度已用尽 (${count}/${maxDomains})，请升级以获取更多配额` 
+                message: `您的账号额度已满 (${count}/${maxDomains})，无法创建更多页面。请联系管理员升级。` 
             };
         }
 
@@ -142,18 +168,31 @@ router.post('/config/refresh-blocklist', requireAdmin, async (req, res) => {
     }
 });
 
-// ── POST /api/config/refresh-quotas ─────────────────────────────────────────────
+// ── POST /api/project/config/refresh-quotas ─────────────────────────────────────────────
 router.post('/config/refresh-quotas', requireAdmin, async (req, res) => {
     try {
         const list = await kvGet('__sys__quotas');
         if (list && typeof list === 'object') {
-            memoryQuotas = { 
-                'free': 1, 'pro': 5, 'partner': 10, 'admin': 999, // Defaults
-                ...list 
+            const defaults = {
+                'free': { limit: 1, label: '🌟 体验用户' },
+                'pro': { limit: 5, label: '💎 高级会员' },
+                'partner': { limit: 10, label: '👑 终身合伙人' },
+                'admin': { limit: 999, label: '🛡️ 系统管理员' }
             };
+            
+            // Re-merge with defaults to allow partial overrides
+            let newQuotas = { ...defaults };
+            for (const key in list) {
+                if (typeof list[key] === 'number') {
+                    newQuotas[key] = { ...defaults[key], limit: list[key] };
+                } else if (typeof list[key] === 'object') {
+                    newQuotas[key] = { ...defaults[key], ...list[key] };
+                }
+            }
+            memoryQuotas = newQuotas;
         }
         quotasLoaded = true;
-        return res.json({ success: true, quotas: memoryQuotas, message: 'Quotas refreshed in memory' });
+        return res.json({ success: true, quotas: memoryQuotas, message: 'Quotas and labels refreshed in memory' });
     } catch (err) {
         console.error('[project/refresh-quotas]', err);
         return res.status(500).json({ error: err.message });
@@ -180,6 +219,18 @@ router.post('/render', async (req, res) => {
             return res.status(400).json({ code: authCheck.code, message: authCheck.message, data: null });
         }
         const isUpdate = (authCheck.mode === 'UPDATE');
+
+        // Tracking daily edits in profiles table
+        if (isUpdate) {
+            try {
+                await supabase.from('profiles').update({
+                    daily_edit_count: (authCheck.dailyCount || 0) + 1,
+                    last_edit_date: authCheck.today
+                }).eq('id', userId);
+            } catch (e) {
+                console.error('[Quota Update Error]', e);
+            }
+        }
 
         // 3. Load template metadata from target R2 directory/KV
         const meta = await kvGet(`__tmpl__${type}`);
@@ -275,6 +326,85 @@ router.get('/:subdomain', requireAdmin, async (req, res) => {
         return res.json({ success: true, subdomain, config });
     } catch (err) {
         console.error('[project/get]', err);
+        return res.status(500).json({ error: err.message });
+    }
+});
+
+// ── GET /api/project/status/:userId ───────────────────────────────────────
+// Fetch user's current tier, domain count, and max quota limit
+router.get('/status/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        if (!userId) return res.status(400).json({ error: 'Missing userId' });
+
+        // 1. Fetch user tier and edit stats
+        const { data: profile, error: profileErr } = await supabase
+            .from('profiles')
+            .select('tier, daily_edit_count, last_edit_date')
+            .eq('id', userId)
+            .maybeSingle();
+        
+        if (profileErr) throw new Error('Supabase Profile Error: ' + profileErr.message);
+        const tier = profile?.tier || 'free';
+
+        // 2. Count existing projects
+        const { count, error: countErr } = await supabase
+            .from('projects')
+            .select('subdomain', { count: 'exact', head: true })
+            .eq('user_id', userId);
+        
+        if (countErr) throw new Error('Supabase Count Error: ' + countErr.message);
+
+        // 3. Get quota limits
+        await ensureQuotas();
+        const tierConfig = memoryQuotas[tier] || memoryQuotas['free'];
+        const maxDomains = tierConfig?.limit || 1;
+        const maxDailyEdits = tierConfig?.dailyLimit || 5;
+        const label = tierConfig?.label || '未知等级';
+        
+        const today = new Date().toISOString().split('T')[0];
+        const dailyUsedEdits = profile?.last_edit_date === today ? (profile?.daily_edit_count || 0) : 0;
+
+        return res.json({
+            success: true,
+            data: {
+                tier,
+                label,
+                count: count || 0,
+                maxDomains,
+                dailyUsedEdits,
+                maxDailyEdits
+            }
+        });
+    } catch (err) {
+        console.error('[project/status] Fatal Error', err);
+        return res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// ── GET /api/project/config-by-subdomain/:subdomain ────────────────────────
+// Fetch existing project config for edit mode (Owner only)
+router.get('/config-by-subdomain/:subdomain', async (req, res) => {
+    const { subdomain } = req.params;
+    const userId = req.query.userId;
+
+    try {
+        const { data: project, error } = await supabase
+            .from('projects')
+            .select('*')
+            .eq('subdomain', subdomain)
+            .maybeSingle();
+
+        if (error) throw error;
+        if (!project) return res.status(404).json({ error: 'Project not found' });
+        
+        // Basic security: require userId if not admin
+        if (userId && project.user_id !== userId) {
+            return res.status(403).json({ error: 'Permission denied' });
+        }
+
+        return res.json({ success: true, data: project });
+    } catch (err) {
         return res.status(500).json({ error: err.message });
     }
 });
