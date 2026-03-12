@@ -70,12 +70,24 @@ router.post('/upload', requireAdmin, upload.any(), async (req, res) => {
 
         // Parse schema if present
         let fields = [];
+        let fieldsConfig = null;
         let isStatic = true;
         const schemaFile = files.find((f) => f.fieldname === 'schema.json');
         if (schemaFile) {
-            const schema = JSON.parse(schemaFile.buffer.toString('utf-8'));
-            fields = (schema.fields ?? []).map((f) => f.key ?? f);
-            isStatic = schema.static === true || fields.length === 0;
+            try {
+                const schema = JSON.parse(schemaFile.buffer.toString('utf-8'));
+                if (Array.isArray(schema.fields)) {
+                    // Old string array format "fields": ["title", "sender"]
+                    fields = schema.fields.map((f) => f.key ?? f);
+                } else if (typeof schema.fields === 'object' && schema.fields !== null) {
+                    // New object format "fields": { "title": { "label": "...", "default": "..." } }
+                    fieldsConfig = schema.fields;
+                    fields = Object.keys(schema.fields);
+                }
+                isStatic = schema.static === true || fields.length === 0;
+            } catch (e) {
+                console.error('Invalid schema.json', e);
+            }
         }
 
         // Register / update template metadata in KV
@@ -83,6 +95,7 @@ router.post('/upload', requireAdmin, upload.any(), async (req, res) => {
             name: templateName,
             version,
             fields,
+            fields_config: fieldsConfig,
             static: isStatic,
             updatedAt: new Date().toISOString(),
         });
@@ -98,6 +111,7 @@ router.post('/upload', requireAdmin, upload.any(), async (req, res) => {
             templateName,
             version,
             fields,
+            fields_config: fieldsConfig,
             static: isStatic,
             filesUploaded: uploadedFiles,
             previewUrl: `https://www.885201314.xyz/preview/${templateName}`,
