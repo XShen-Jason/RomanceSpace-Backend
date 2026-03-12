@@ -18,6 +18,30 @@ const BASE_DOMAIN = '885201314.xyz';
 let memoryBlocklist = [];
 let blocklistLoaded = false;
 
+let memoryQuotas = {
+    'free': 1,
+    'pro': 5,
+    'partner': 10,
+    'admin': 999
+};
+let quotasLoaded = false;
+
+async function ensureQuotas() {
+    if (!quotasLoaded) {
+        try {
+            const list = await kvGet('__sys__quotas');
+            if (list && typeof list === 'object') {
+                memoryQuotas = { ...memoryQuotas, ...list };
+            }
+            quotasLoaded = true;
+            console.log('[Quotas] Initial loaded from KV:', Object.keys(memoryQuotas).length, 'tiers');
+        } catch (e) {
+            console.error('[Quotas] Init failed', e);
+            quotasLoaded = true;
+        }
+    }
+}
+
 async function ensureBlocklist() {
     if (!blocklistLoaded) {
         try {
@@ -64,7 +88,19 @@ async function validateAndCheckQuota(userId, subdomain) {
         return { isValid: true, mode: 'UPDATE' };
     } else {
         // Domain is not taken = Create Scenario (A-1)
-        // Feature: 1 Free Domain Limit Check
+        
+        // 1. Fetch user tier from profiles table
+        const { data: profile, error: profileErr } = await supabase
+            .from('profiles')
+            .select('tier')
+            .eq('id', userId)
+            .maybeSingle();
+
+        if (profileErr) throw new Error('Supabase Profile Error: ' + profileErr.message);
+        
+        const tier = profile?.tier || 'free';
+
+        // 2. Count existing projects
         const { count, error: countErr } = await supabase
             .from('projects')
             .select('subdomain', { count: 'exact', head: true })
@@ -72,9 +108,17 @@ async function validateAndCheckQuota(userId, subdomain) {
 
         if (countErr) throw new Error('Supabase Count Error: ' + countErr.message);
 
-        const MAX_FREE_DOMAINS = 1; // Later can query a 'users' table to check if VIP
-        if (count >= MAX_FREE_DOMAINS) {
-            return { isValid: false, code: 4030, message: '免费域名额度已用尽，请开通 VIP 获取更多配额' };
+        // 3. Define and check quota mapping
+        await ensureQuotas();
+        
+        const maxDomains = memoryQuotas[tier] || memoryQuotas['free'] || 1;
+        
+        if (count >= maxDomains) {
+            return { 
+                isValid: false, 
+                code: 4030, 
+                message: `您的当前等级 (${tier}) 域名额度已用尽 (${count}/${maxDomains})，请升级以获取更多配额` 
+            };
         }
 
         return { isValid: true, mode: 'CREATE' };
@@ -94,6 +138,24 @@ router.post('/config/refresh-blocklist', requireAdmin, async (req, res) => {
         return res.json({ success: true, count: memoryBlocklist.length, message: 'Blocklist refreshed in memory' });
     } catch (err) {
         console.error('[project/refresh-blocklist]', err);
+        return res.status(500).json({ error: err.message });
+    }
+});
+
+// ── POST /api/config/refresh-quotas ─────────────────────────────────────────────
+router.post('/config/refresh-quotas', requireAdmin, async (req, res) => {
+    try {
+        const list = await kvGet('__sys__quotas');
+        if (list && typeof list === 'object') {
+            memoryQuotas = { 
+                'free': 1, 'pro': 5, 'partner': 10, 'admin': 999, // Defaults
+                ...list 
+            };
+        }
+        quotasLoaded = true;
+        return res.json({ success: true, quotas: memoryQuotas, message: 'Quotas refreshed in memory' });
+    } catch (err) {
+        console.error('[project/refresh-quotas]', err);
         return res.status(500).json({ error: err.message });
     }
 });
@@ -139,9 +201,18 @@ router.post('/render', async (req, res) => {
         const schema = metaBuf ? JSON.parse(metaBuf.toString('utf-8')) : null;
 
         // 5. Render HTML with user data
-        const rendered = injectData(htmlBuf.toString('utf-8'), data, schema);
+        let rendered = injectData(htmlBuf.toString('utf-8'), data, schema);
 
-        // 6. Push final static HTML to R2
+        // 6. Inject <base> tag so relative assets load from the CDN
+        const baseTag = `<base href="https://www.885201314.xyz/assets/${type}/" />`;
+        const headRegex = /<head[^>]*>/i;
+        if (headRegex.test(rendered)) {
+            rendered = rendered.replace(headRegex, (match) => `${match}\n    ${baseTag}`);
+        } else {
+            rendered = `${baseTag}\n${rendered}`;
+        }
+
+        // 7. Push final static HTML to R2
         await r2Put(`pages/${subdomain}/index.html`, Buffer.from(rendered, 'utf-8'), 'text/html;charset=UTF-8');
 
         // 7. Push lightweight router config to KV (Edge router uses status:1 to allow traffic)
