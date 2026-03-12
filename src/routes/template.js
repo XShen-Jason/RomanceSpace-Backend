@@ -6,6 +6,8 @@
  */
 const express = require('express');
 const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 const { requireAdmin } = require('../middleware/auth');
 const { r2Put, r2Get } = require('../utils/r2');
 const { kvGet, kvPut, kvList } = require('../utils/kv');
@@ -16,6 +18,30 @@ const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
 let cachedTemplates = null;
+
+// Path where the static template list JSON is written.
+// Nginx serves this file directly at /templates.json — sub-5ms, zero Node.js overhead.
+const STATIC_TEMPLATE_FILE = process.env.STATIC_TEMPLATE_PATH ?? '/opt/cache/templates.json';
+
+/** Rebuilds the on-disk templates.json from the in-memory cache (or KV if cold). */
+async function rebuildStaticTemplateList() {
+    try {
+        // Ensure the cache is populated
+        if (!cachedTemplates) {
+            const keys = await kvList('__tmpl__');
+            const metas = await Promise.all(keys.map((k) => kvGet(k)));
+            cachedTemplates = metas.filter(Boolean);
+        }
+        const payload = JSON.stringify({ success: true, templates: cachedTemplates });
+        const dir = path.dirname(STATIC_TEMPLATE_FILE);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(STATIC_TEMPLATE_FILE, payload, 'utf-8');
+        console.log(`[template/list] Static file updated: ${STATIC_TEMPLATE_FILE} (${cachedTemplates.length} templates)`);
+    } catch (err) {
+        // Non-fatal: the API endpoint is still available as fallback
+        console.error('[template/list] Failed to write static file:', err.message);
+    }
+}
 
 // ── POST /api/template/upload ─────────────────────────────────────────────────
 router.post('/upload', requireAdmin, upload.any(), async (req, res) => {
@@ -61,12 +87,11 @@ router.post('/upload', requireAdmin, upload.any(), async (req, res) => {
             updatedAt: new Date().toISOString(),
         });
 
-        // Invalidate the in-memory template list cache
+        // Invalidate the in-memory cache and rebuild the static templates.json file on disk
         cachedTemplates = null;
-
-        // TODO (P2): async re-render old user pages that use this template
-        // For now we log it; BullMQ / worker job to be added later
-        // (Legacy KV index removed - future implementation should query Supabase)
+        rebuildStaticTemplateList().catch(err => {
+            console.error('[template/upload] Failed to rebuild static list:', err);
+        });
 
         return res.json({
             success: true,
@@ -143,7 +168,7 @@ router.get('/preview/:name', async (req, res) => {
         // 1. Inject <base> tag so relative assets (CSS/JS) load from the versions path in CDN
         // Note: Deployment guide suggests assets are served from /assets/:name/ which maps to R2
         const baseTag = `<base href="https://www.885201314.xyz/assets/${name}/" />`;
-        
+
         // Robust injection: find <head> case-insensitive, or prepend if missing
         const headRegex = /<head[^>]*>/i;
         if (headRegex.test(html)) {
