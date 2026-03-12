@@ -101,43 +101,6 @@ router.get('/list', async (_req, res) => {
     }
 });
 
-// ── GET /assets/:type/*filepath — Serve template static assets from R2 ─────────
-// This is the critical path for CSS/JS/images in both the Gallery preview and
-// the Builder's real-time preview iframe.
-// Cache: in-memory version map to avoid KV reads on every asset request.
-const assetVersionCache = new Map();
-
-router.get('/assets/:type/*', async (req, res) => {
-    try {
-        const { type } = req.params;
-        // Express 4 wildcard: req.params[0] holds the rest of the path
-        const filePath = req.params[0];
-
-        // 1. Resolve template version (in-memory cache → KV)
-        let version = assetVersionCache.get(type);
-        if (!version) {
-            const meta = await kvGet(`__tmpl__${type}`);
-            if (!meta) return res.status(404).send('Template not found');
-            version = meta.version;
-            assetVersionCache.set(type, version);
-        }
-
-        // 2. Fetch from R2
-        const r2Key = `templates/${type}/${version}/${filePath}`;
-        const buf = await r2Get(r2Key);
-        if (!buf) return res.status(404).send('Asset not found');
-
-        // 3. Return with correct MIME type and long cache (versioned path = immutable)
-        const { getMime } = require('../utils/mime');
-        res.set('Content-Type', getMime(filePath));
-        res.set('Cache-Control', 'public, max-age=31536000, immutable');
-        return res.send(buf);
-    } catch (err) {
-        console.error('[template/assets]', err);
-        return res.status(500).send('Internal Server Error');
-    }
-});
-
 // ── GET /api/template/raw/:name ──────────────────────────────────────────────
 router.get('/raw/:name', async (req, res) => {
     try {
@@ -197,6 +160,41 @@ router.get('/preview/:name', async (req, res) => {
         return res.send(rendered);
     } catch (err) {
         console.error('[template/preview]', err);
+        return res.status(500).send('Internal Server Error');
+    }
+});
+// ── GET /assets/:type/*filepath — Serve template static assets from R2 ─────────
+// IMPORTANT: This wildcard route MUST be defined AFTER all named routes (/list,
+// /raw, /preview) so it does not shadow them. It handles the case where this
+// router is mounted at /assets in app.js: /assets/anniversary/style.css → type=anniversary, filepath=style.css
+const assetVersionCache = new Map();
+
+router.get('/:type/*', async (req, res) => {
+    try {
+        const { type } = req.params;
+        const filePath = req.params[0];
+
+        // 1. Resolve template version (in-memory cache → KV)
+        let version = assetVersionCache.get(type);
+        if (!version) {
+            const meta = await kvGet(`__tmpl__${type}`);
+            if (!meta) return res.status(404).send('Template not found');
+            version = meta.version;
+            assetVersionCache.set(type, version);
+        }
+
+        // 2. Fetch from R2
+        const r2Key = `templates/${type}/${version}/${filePath}`;
+        const buf = await r2Get(r2Key);
+        if (!buf) return res.status(404).send('Asset not found');
+
+        // 3. Return with correct MIME type and long cache (versioned path = immutable)
+        const { getMime } = require('../utils/mime');
+        res.set('Content-Type', getMime(filePath));
+        res.set('Cache-Control', 'public, max-age=31536000, immutable');
+        return res.send(buf);
+    } catch (err) {
+        console.error('[template/assets]', err);
         return res.status(500).send('Internal Server Error');
     }
 });
