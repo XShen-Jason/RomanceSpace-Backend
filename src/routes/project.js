@@ -112,7 +112,7 @@ async function validateAndCheckQuota(userId, subdomain) {
             return { isValid: false, code: 4022, message: `今日修改次数已达上限 (${maxDailyEdits}次)，请明天再试或升级等级哦` };
         }
         
-        return { isValid: true, mode: 'UPDATE', dailyCount, today };
+        return { isValid: true, mode: 'UPDATE', tier, dailyCount, today };
     } else {
         // Domain is not taken = Create Scenario (A-1)
         
@@ -149,7 +149,7 @@ async function validateAndCheckQuota(userId, subdomain) {
             };
         }
 
-        return { isValid: true, mode: 'CREATE' };
+        return { isValid: true, mode: 'CREATE', tier };
     }
 }
 
@@ -198,7 +198,7 @@ router.post('/config/refresh-quotas', requireAdmin, async (req, res) => {
 // Universal CQRS write endpoint (Handles Create & Update)
 router.post('/render', async (req, res) => {
     try {
-        const { userId, subdomain, type, data = {} } = req.body ?? {};
+        const { userId, subdomain, type, data = {}, showViralFooter = true } = req.body ?? {};
 
         // 1. Payload validation
         if (!subdomain || !type) {
@@ -214,6 +214,10 @@ router.post('/render', async (req, res) => {
             return res.status(400).json({ code: authCheck.code, message: authCheck.message, data: null });
         }
         const isUpdate = (authCheck.mode === 'UPDATE');
+        const userTier = authCheck.tier || 'free';
+
+        // Force viral footer for free users
+        const finalShowViralFooter = userTier === 'free' ? true : (showViralFooter !== false);
 
         // Tracking daily edits in profiles table
         if (isUpdate) {
@@ -249,6 +253,46 @@ router.post('/render', async (req, res) => {
         // 5. Render HTML with user data
         let rendered = injectData(htmlBuf.toString('utf-8'), data, schema);
 
+        // 5.5 Fetch Inviter Code and Inject Viral Footer
+        let inviteCode = '';
+        if (finalShowViralFooter) {
+            try {
+                const { data: profile } = await supabase
+                    .from('profiles')
+                    .select('invite_code')
+                    .eq('id', userId)
+                    .maybeSingle();
+                inviteCode = profile?.invite_code || '';
+            } catch (e) {
+                console.error('[Invite Code Fetch Error]', e);
+            }
+        }
+
+        if (finalShowViralFooter) {
+            const referralLink = `https://www.885201314.xyz/builder/${type}?ref=${inviteCode}&src=footer`;
+            const footerHtml = `
+    <!-- RomanceSpace Viral Footer -->
+    <div style="position: relative; margin-top: 50px; padding: 20px 0 40px; text-align: center; font-family: sans-serif; border-top: 1px dashed rgba(0,0,0,0.05);">
+        <div style="display: inline-block; background: white; padding: 12px 24px; border-radius: 30px; box-shadow: 0 4px 15px rgba(0,0,0,0.06); border: 1px solid #fce4ec;">
+            <p style="margin: 0; color: #666; font-size: 13px; line-height: 1.5;">
+                <span style="color: #ff477e;">❤️ RomanceSpace</span><br/>
+                想要制作同款浪漫网页？
+                <a href="${referralLink}" target="_blank" rel="noopener noreferrer" style="color: #ff477e; text-decoration: none; font-weight: bold; margin-left: 4px;">
+                    点击创建你的专属页面 ✨
+                </a>
+            </p>
+        </div>
+        <div style="height: env(safe-area-inset-bottom); min-height: 20px;"></div>
+    </div>`;
+
+            const bodyEndIdx = rendered.lastIndexOf('</body>');
+            if (bodyEndIdx !== -1) {
+                rendered = rendered.substring(0, bodyEndIdx) + footerHtml + '\n' + rendered.substring(bodyEndIdx);
+            } else {
+                rendered += '\n' + footerHtml;
+            }
+        }
+
         // 6. Inject <base> tag so relative assets load from the CDN
         const baseTag = `<base href="https://www.885201314.xyz/assets/${type}/" />`;
         const headRegex = /<head[^>]*>/i;
@@ -262,11 +306,16 @@ router.post('/render', async (req, res) => {
         await r2Put(`pages/${subdomain}/index.html`, Buffer.from(rendered, 'utf-8'), 'text/html;charset=UTF-8');
 
         // 7. Push lightweight router config to KV (Edge router uses status:1 to allow traffic)
-        // Optimization: only write to KV if new or template type changed (Reduce KV Write quota)
+        // Optimization: only write to KV if new or template type/footer changed (Reduce KV Write quota)
         const oldConfig = isUpdate ? await kvGet(subdomain) : null;
-        if (!oldConfig || oldConfig.template !== type || oldConfig.status !== 1) {
-            await kvPut(subdomain, { status: 1, template: type });
-            console.log(`[project/render] KV Route Updated for ${subdomain} (Type: ${type})`);
+        const configDiffers = !oldConfig 
+            || oldConfig.template !== type 
+            || oldConfig.status !== 1
+            || oldConfig.showViralFooter !== finalShowViralFooter;
+
+        if (configDiffers) {
+            await kvPut(subdomain, { status: 1, template: type, showViralFooter: finalShowViralFooter });
+            console.log(`[project/render] KV Route Updated for ${subdomain} (Type: ${type}, Footer: ${finalShowViralFooter})`);
         } else {
             console.log(`[project/render] KV Route Skip (Unchanged) for ${subdomain}`);
         }
@@ -282,6 +331,7 @@ router.post('/render', async (req, res) => {
                 user_id: userId,
                 template_type: type,
                 data: data,
+                show_viral_footer: finalShowViralFooter,
                 updated_at: new Date().toISOString()
             }, { onConflict: 'subdomain' });
 
