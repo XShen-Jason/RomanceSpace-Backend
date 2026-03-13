@@ -126,7 +126,7 @@ async function validateAndCheckQuota(userId, subdomain) {
             return { isValid: false, code: 4022, message: `今日修改次数已达上限 (${maxDailyEdits}次)，请明天再试或升级等级哦` };
         }
         
-        return { isValid: true, mode: 'UPDATE', tier, dailyCount, today };
+        return { isValid: true, mode: 'UPDATE', tier, dailyCount, today, tierConfig };
     } else {
         // Domain is not taken -> Create Scenario. Check Total Projects Quota.
         const { count, error: countErr } = await supabase
@@ -145,7 +145,7 @@ async function validateAndCheckQuota(userId, subdomain) {
             };
         }
         
-        return { isValid: true, mode: 'CREATE', tier, count, today };
+        return { isValid: true, mode: 'CREATE', tier, count, today, tierConfig };
     }
 }
 
@@ -213,6 +213,7 @@ router.post('/render', async (req, res) => {
         const userTier = authCheck.tier || 'free';
 
         // Force viral footer if tier doesn't allow hiding it
+        const tierConfig = authCheck.tierConfig;
         const allowHide = tierConfig?.allowHideFooter ?? false;
         const finalShowViralFooter = allowHide ? (showViralFooter !== false) : true;
 
