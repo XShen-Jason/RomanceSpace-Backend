@@ -267,18 +267,17 @@ router.post('/render', async (req, res) => {
         if (finalShowViralFooter) {
             const referralLink = `https://www.885201314.xyz/builder/${type}?ref=${inviteCode}&src=footer`;
             const footerHtml = `
-    <!-- RomanceSpace Viral Footer -->
-    <div style="clear: both; display: block; width: 100%; position: relative; margin-top: 50px; padding: 20px 0 40px; text-align: center; font-family: sans-serif; border-top: 1px dashed rgba(0,0,0,0.05); z-index: 1000;">
-        <div style="display: inline-block; background: white; padding: 12px 24px; border-radius: 30px; box-shadow: 0 4px 15px rgba(0,0,0,0.06); border: 1px solid #fce4ec; max-width: 90%; box-sizing: border-box;">
-            <p style="margin: 0; color: #666; font-size: 13px; line-height: 1.5;">
-                <span style="color: #ff477e;">❤️ RomanceSpace</span><br/>
-                想要制作同款浪漫网页？
-                <a href="${referralLink}" target="_blank" rel="noopener noreferrer" style="color: #ff477e; text-decoration: none; font-weight: bold; margin-left: 4px;">
-                    点击创建你的专属页面 ✨
+    <!-- RomanceSpace Viral Floating Footer -->
+    <div style="position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 999999; width: auto; max-width: 90%; white-space: nowrap; pointer-events: none;">
+        <div style="pointer-events: auto; display: inline-block; background: rgba(255, 255, 255, 0.75); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); padding: 8px 18px; border-radius: 50px; box-shadow: 0 4px 15px rgba(0,0,0,0.08); border: 1px solid rgba(252, 228, 236, 0.5); text-align: center; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+            <p style="margin: 0; color: #777; font-size: 12px; letter-spacing: 0.2px;">
+                <span style="color: #ff477e; font-weight: 500;">❤️ RomanceSpace</span>
+                <span style="margin: 0 6px; opacity: 0.3;">|</span>
+                <a href="${referralLink}" target="_blank" rel="noopener noreferrer" style="color: #ff477e; text-decoration: none; font-weight: 500;">
+                    制作同款网页 ✨
                 </a>
             </p>
         </div>
-        <div style="height: env(safe-area-inset-bottom); min-height: 20px;"></div>
     </div>`;
 
             const bodyEndIdx = rendered.lastIndexOf('</body>');
