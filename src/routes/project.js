@@ -268,8 +268,8 @@ router.post('/render', async (req, res) => {
             const referralLink = `https://www.885201314.xyz/builder/${type}?ref=${inviteCode}&src=footer`;
             const footerHtml = `
     <!-- RomanceSpace Viral Footer -->
-    <div style="position: relative; margin-top: 50px; padding: 20px 0 40px; text-align: center; font-family: sans-serif; border-top: 1px dashed rgba(0,0,0,0.05);">
-        <div style="display: inline-block; background: white; padding: 12px 24px; border-radius: 30px; box-shadow: 0 4px 15px rgba(0,0,0,0.06); border: 1px solid #fce4ec;">
+    <div style="clear: both; display: block; width: 100%; position: relative; margin-top: 50px; padding: 20px 0 40px; text-align: center; font-family: sans-serif; border-top: 1px dashed rgba(0,0,0,0.05); z-index: 1000;">
+        <div style="display: inline-block; background: white; padding: 12px 24px; border-radius: 30px; box-shadow: 0 4px 15px rgba(0,0,0,0.06); border: 1px solid #fce4ec; max-width: 90%; box-sizing: border-box;">
             <p style="margin: 0; color: #666; font-size: 13px; line-height: 1.5;">
                 <span style="color: #ff477e;">❤️ RomanceSpace</span><br/>
                 想要制作同款浪漫网页？
