@@ -100,9 +100,10 @@ async function validateAndCheckQuota(userId, subdomain, template) {
     }
 
     // 2. Fetch all user projects to check quota and identify the latest one
+    // Include 'template' to check for grandfathered-in access
     const { data: userProjects, error: fetchArrErr } = await supabase
         .from('projects')
-        .select('id, subdomain, updated_at')
+        .select('id, subdomain, template, updated_at')
         .eq('user_id', userId)
         .order('updated_at', { ascending: false });
 
@@ -135,7 +136,8 @@ async function validateAndCheckQuota(userId, subdomain, template) {
         }
 
         // It is the latest project. Now check if the template being used is Free.
-        if (template) {
+        // GRANDFATHERING POLICY: If the project was already using this template before it went Pro, allow it.
+        if (template && existingProject.template !== template) {
             const tmplMeta = await kvGet(`__tmpl__${template}`);
             if (tmplMeta && tmplMeta.tier !== 'free') {
                 return {
