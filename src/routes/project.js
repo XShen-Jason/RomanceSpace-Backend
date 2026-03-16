@@ -66,12 +66,12 @@ async function ensureBlocklist() {
 }
 
 // ── Helper: Supabase Validation & Quota Checking ─────────────────────────────
-async function validateAndCheckQuota(userId, subdomain) {
+async function validateAndCheckQuota(userId, subdomain, template) {
     if (!userId) {
         return { isValid: false, code: 4001, message: '请求必须包含 userId 以验证身份' };
     }
 
-    // 1. Fetch user tier & profile once (needed for all checks)
+    // 1. Fetch user tier & profile once
     const { data: profile, error: profileErr } = await supabase
         .from('profiles')
         .select('tier, role, daily_edit_count, last_edit_date')
@@ -88,40 +88,71 @@ async function validateAndCheckQuota(userId, subdomain) {
     const tierConfig = memoryQuotas[tier] || memoryQuotas['free'];
     const minLen = tierConfig?.minDomainLen || 3;
 
-    // Tier-based Length Guard: protect 1-2 char domains (based on KV tier config)
+    // Domain length check...
     if (subLow.length < minLen) {
         return { isValid: false, code: 4002, message: `该域名前缀太短啦，您的等级至少需要 ${minLen} 个字符哦` };
     }
 
-    // Hardcoded system-reserved words fallback
     const HARDCODED_RESERVED = ['api', 'www', 'admin', 'rs', 'romance', 'space', 'help', 'docs', 'status'];
-    
     await ensureBlocklist();
     if (memoryBlocklist.includes(subLow) || HARDCODED_RESERVED.includes(subLow)) {
         return { isValid: false, code: 4003, message: '该域名为系统保留字或已禁用，请更换试试哦' };
     }
 
-    // 3. Check if subdomain already exists
-    const { data: existingProject, error: fetchErr } = await supabase
+    // 2. Fetch all user projects to check quota and identify the latest one
+    const { data: userProjects, error: fetchArrErr } = await supabase
         .from('projects')
-        .select('user_id')
-        .eq('subdomain', subdomain)
-        .maybeSingle();
+        .select('id, subdomain, updated_at')
+        .eq('user_id', userId)
+        .order('updated_at', { ascending: false });
 
-    if (fetchErr) throw new Error('Supabase Fetch Error: ' + fetchErr.message);
+    if (fetchArrErr) throw new Error('Supabase Projects Fetch Error: ' + fetchArrErr.message);
 
+    const currentProjectCount = userProjects?.length || 0;
+    const maxDomains = tierConfig?.limit || 1;
+    const existingProject = userProjects?.find(p => p.subdomain === subLow);
     const today = new Date().toISOString().split('T')[0];
 
-    if (existingProject) {
-        // Domain is taken. Check ownership.
-        if (existingProject.user_id !== userId) {
-            return { isValid: false, code: 4010, message: '该域名前缀已被他人抢先使用，请更换试试哦' };
+    // ── ADVANCED DOWNGRADE POLICY ────────────────────────────────────────────
+    if (currentProjectCount > maxDomains) {
+        // If it's a NEW project creation attempt while already over quota
+        if (!existingProject) {
+            return { 
+                isValid: false, 
+                code: 4020, 
+                message: `您的额度已过期 (${currentProjectCount}/${maxDomains})，暂时无法创建新项目，请续费或清理项目哦` 
+            };
         }
-        
-        // Ownership verified -> Update Scenario. Check Daily Edit Quota.
+
+        // Ownership verified (existingProject belongs to user). Check if it's the "Active/Latest" one.
+        const activeProjectId = userProjects[0]?.id;
+        if (existingProject.id !== activeProjectId) {
+            return {
+                isValid: false,
+                code: 4021,
+                message: '由于等级到期，该项目已被锁定访问。仅最近编辑的一个项目可继续维护。'
+            };
+        }
+
+        // It is the latest project. Now check if the template being used is Free.
+        if (template) {
+            const tmplMeta = await kvGet(`__tmpl__${template}`);
+            if (tmplMeta && tmplMeta.tier !== 'free') {
+                return {
+                    isValid: false,
+                    code: 4025,
+                    message: '等级到期进入维护模式：当前仅限使用“免费”模板进行修改。'
+                };
+            }
+        }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    if (existingProject) {
+        // Domain is taken by user -> Update Scenario. Check Daily Edit Quota.
         const maxDailyEdits = tierConfig?.dailyLimit || 5;
         let dailyCount = profile?.daily_edit_count || 0;
-        if (profile?.last_edit_date !== today) dailyCount = 0; // Reset for new day
+        if (profile?.last_edit_date !== today) dailyCount = 0;
         
         if (dailyCount >= maxDailyEdits) {
             return { isValid: false, code: 4022, message: `今日修改次数已达上限 (${maxDailyEdits}次)，请明天再试或升级等级哦` };
@@ -129,24 +160,11 @@ async function validateAndCheckQuota(userId, subdomain) {
         
         return { isValid: true, mode: 'UPDATE', tier, dailyCount, today, tierConfig };
     } else {
-        // Domain is not taken -> Create Scenario. Check Total Projects Quota.
-        const { count, error: countErr } = await supabase
-            .from('projects')
-            .select('subdomain', { count: 'exact', head: true })
-            .eq('user_id', userId);
-
-        if (countErr) throw new Error('Supabase Count Error: ' + countErr.message);
-
-        const maxDomains = tierConfig?.limit || 1;
-        if (count >= maxDomains) {
-            return { 
-                isValid: false, 
-                code: 4030, 
-                message: `您的账号额度已满 (${count}/${maxDomains})，无法创建更多页面。请联系管理员升级。` 
-            };
+        // Create Scenario. Check Standard Quota.
+        if (currentProjectCount >= maxDomains) {
+            return { isValid: false, code: 4023, message: `项目创建额度已满 (${maxDomains})，请升级等级以获得更多额度哦` };
         }
-        
-        return { isValid: true, mode: 'CREATE', tier, count, today, tierConfig };
+        return { isValid: true, mode: 'CREATE', tier, tierConfig };
     }
 }
 
@@ -275,7 +293,7 @@ router.post('/render', async (req, res) => {
         }
 
         // 2. Ownership & Quota checks via Supabase
-        const authCheck = await validateAndCheckQuota(userId, subdomain);
+        const authCheck = await validateAndCheckQuota(userId, subdomain, type);
         if (!authCheck.isValid) {
             return res.status(400).json({ code: authCheck.code, message: authCheck.message, data: null });
         }
@@ -466,13 +484,17 @@ router.get('/status/:userId', async (req, res) => {
         
         console.log(`[Debug Quota] User: ${userId}, Raw Tier: "${profile?.tier}", Role: "${profile?.role}", Final Tier: "${tier}"`);
 
-        // 2. Count existing projects
-        const { count, error: countErr } = await supabase
+        // 2. Fetch all user projects to check quota and identify active project
+        const { data: userProjects, error: fetchErr } = await supabase
             .from('projects')
-            .select('subdomain', { count: 'exact', head: true })
-            .eq('user_id', userId);
+            .select('id, subdomain, updated_at')
+            .eq('user_id', userId)
+            .order('updated_at', { ascending: false });
         
-        if (countErr) throw new Error('Supabase Count Error: ' + countErr.message);
+        if (fetchErr) throw new Error('Supabase Fetch Projects Error: ' + fetchErr.message);
+        
+        const count = userProjects?.length || 0;
+        const activeProjectId = userProjects?.[0]?.id || null;
 
         // 3. Get quota limits
         await ensureQuotas();
@@ -491,8 +513,10 @@ router.get('/status/:userId', async (req, res) => {
             data: {
                 tier,
                 label,
-                count: count || 0,
+                count,
                 maxDomains,
+                isOverQuota: count > maxDomains,
+                activeProjectId,
                 dailyUsedEdits,
                 maxDailyEdits,
                 minDomainLen,
