@@ -38,10 +38,10 @@ curl -X POST http://localhost:3000/api/template/upload \
   -H "X-Admin-Key: your-key" \
   -F "templateName=love_letter" \
   -F "index.html=@./index.html" \
-  -F "schema.json=@./schema.json"
+  -F "config.json=@./config.json"
 ```
 
-Response: `{ success, templateName, version, fields, filesUploaded, previewUrl }`
+Response: `{ success, templateName, title, version, fields, filesUploaded, previewUrl }`
 
 ### POST /api/project/render
 

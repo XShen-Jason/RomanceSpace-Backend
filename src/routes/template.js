@@ -130,16 +130,23 @@ router.post('/upload', requireAdmin, upload.any(), async (req, res) => {
         // Parse metadata (config.json or schema.json)
         let fields = [];
         let isStatic = true;
+        let title = templateName; // Fallback to slug
         const metaFile = files.find((f) => f.fieldname === 'config.json' || f.fieldname === 'schema.json');
         if (metaFile) {
-            const schema = JSON.parse(metaFile.buffer.toString('utf-8'));
-            fields = schema.fields ?? [];
-            isStatic = schema.static === true || fields.length === 0;
+            try {
+                const schema = JSON.parse(metaFile.buffer.toString('utf-8'));
+                fields = schema.fields ?? [];
+                isStatic = schema.static === true || fields.length === 0;
+                if (schema.title) title = schema.title;
+            } catch (e) {
+                console.warn(`[template/upload] Failed to parse config.json for ${templateName}`);
+            }
         }
 
         // Register / update template metadata in KV
         await kvPut(`__tmpl__${templateName}`, {
             name: templateName,
+            title, // Added Chinese/Display title
             version,
             fields,
             static: isStatic,
@@ -231,9 +238,10 @@ router.post('/sync-local', requireAdmin, async (req, res) => {
 
                 const fields = configJson?.fields ?? [];
                 const isStatic = configJson?.static === true || fields.length === 0;
+                const title = configJson?.title || name;
 
                 await kvPut(`__tmpl__${name}`, {
-                    name, version, fields, static: isStatic, updatedAt: new Date().toISOString()
+                    name, title, version, fields, static: isStatic, updatedAt: new Date().toISOString()
                 });
                 results.push({ name, version, source: 'github' });
             }
@@ -275,9 +283,10 @@ router.post('/sync-local', requireAdmin, async (req, res) => {
 
                 const fields = configJson?.fields ?? [];
                 const isStatic = configJson?.static === true || fields.length === 0;
+                const title = configJson?.title || name;
 
                 await kvPut(`__tmpl__${name}`, {
-                    name, version, fields, static: isStatic, updatedAt: new Date().toISOString()
+                    name, title, version, fields, static: isStatic, updatedAt: new Date().toISOString()
                 });
                 results.push({ name, version, source: 'local' });
             }
