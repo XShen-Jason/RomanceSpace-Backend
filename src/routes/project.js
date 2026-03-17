@@ -17,6 +17,8 @@ const BASE_DOMAIN = '885201314.xyz';
 
 let memoryBlocklist = [];
 let blocklistLoaded = false;
+let lastSeenKvBlocklist = null; // Track exact string state from KV
+let stagedBlocklist = null;
 
 const QUOTA_DEFAULTS = {
     'free': { limit: 1, dailyLimit: 3, minDomainLen: 3, allowHideFooter: false, label: '🌟 体验用户' },
@@ -27,11 +29,14 @@ const QUOTA_DEFAULTS = {
 
 let memoryQuotas = { ...QUOTA_DEFAULTS };
 let quotasLoaded = false;
+let lastSeenKvQuotas = null; // Track exact string state from KV
+let stagedQuotas = null;
 
 async function ensureQuotas() {
     if (!quotasLoaded) {
         try {
             const list = await kvGet('__sys__quotas');
+            lastSeenKvQuotas = JSON.stringify(list);
             if (list && typeof list === 'object') {
                 // Merge KV values, supporting both simple numbers and {limit, label} objects
                 for (const key in list) {
@@ -55,6 +60,7 @@ async function ensureBlocklist() {
     if (!blocklistLoaded) {
         try {
             const list = await kvGet('__sys__blocklist');
+            lastSeenKvBlocklist = JSON.stringify(list);
             if (Array.isArray(list)) memoryBlocklist = list.map(s => String(s).toLowerCase());
             blocklistLoaded = true;
             console.log('[Blocklist] Initial loaded from KV:', memoryBlocklist.length, 'items');
@@ -191,8 +197,9 @@ router.get('/config/sync-status', requireAdmin, async (req, res) => {
             kvGet('__sys__blocklist')
         ]);
         
-        const quotasSynced = JSON.stringify(kvQuotas) === JSON.stringify(memoryQuotas);
-        const blocklistSynced = JSON.stringify(kvBlocklist) === JSON.stringify(memoryBlocklist);
+        // Compare with the state we last successfully loaded/synced to memory
+        const quotasSynced = JSON.stringify(kvQuotas) === lastSeenKvQuotas;
+        const blocklistSynced = JSON.stringify(kvBlocklist) === lastSeenKvBlocklist;
 
         // Stage fresh data if drift detected
         stagedQuotas = quotasSynced ? null : kvQuotas;
@@ -224,6 +231,7 @@ router.post('/config/refresh-blocklist', requireAdmin, async (req, res) => {
             console.log('[project/refresh-blocklist] Fetching from KV (Fallback)');
         }
         
+        lastSeenKvBlocklist = JSON.stringify(newBlocklist);
         memoryBlocklist = Array.isArray(newBlocklist) ? newBlocklist.map(s => String(s).toLowerCase()) : [];
         blocklistLoaded = true; // Ensure blocklist is marked as loaded after refresh
         return res.json({ success: true, count: memoryBlocklist.length, message: 'Blocklist refreshed in memory' });
@@ -246,8 +254,11 @@ router.post('/config/refresh-quotas', requireAdmin, async (req, res) => {
             console.log('[project/refresh-quotas] Fetching from KV (Fallback)');
         }
 
+        lastSeenKvQuotas = JSON.stringify(newQuotas);
         if (newQuotas) {
             memoryQuotas = newQuotas;
+        } else {
+            memoryQuotas = { ...QUOTA_DEFAULTS };
         }
         quotasLoaded = true;
         return res.json({ success: true, quotas: memoryQuotas, message: 'Quotas updated in memory' });

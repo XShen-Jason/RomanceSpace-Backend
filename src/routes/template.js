@@ -9,7 +9,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { requireAdmin } = require('../middleware/auth');
-const { r2Put, r2Get } = require('../utils/r2');
+const { r2Put, r2Get, r2List, r2DeleteObjects } = require('../utils/r2');
 const { kvGet, kvPut, kvList, kvDelete } = require('../utils/kv');
 const { makeVersion } = require('../utils/mime');
 const { injectData } = require('../utils/html');
@@ -309,10 +309,31 @@ router.post('/sync-local', requireAdmin, async (req, res) => {
             });
         }
 
+        // --- Orphan Cleanup: Remove KV entries not found in the source ---
+        const syncedNames = new Set(results.map(r => r.name));
+        const allTmplKeys = await kvList('__tmpl__');
+        const orphans = [];
+        for (const key of allTmplKeys) {
+            const tmplSlug = key.replace('__tmpl__', '');
+            if (!syncedNames.has(tmplSlug)) {
+                await kvDelete(key);
+                orphans.push(tmplSlug);
+            }
+        }
+        if (orphans.length > 0) {
+            console.log(`[sync] Purged ${orphans.length} orphaned templates from KV:`, orphans);
+        }
+
         cachedTemplates = null;
         assetVersionCache.clear(); // Clear all version caches since we did a bulk sync
         await rebuildStaticTemplateList();
-        return res.json({ success: true, count: results.length, details: results });
+        return res.json({ 
+            success: true, 
+            count: results.length, 
+            purgedCount: orphans.length,
+            purgedTemplates: orphans,
+            details: results 
+        });
     } catch (err) {
         console.error('[template/sync-local]', err);
         return res.status(500).json({ error: err.message });
@@ -380,6 +401,60 @@ router.delete('/:name', requireAdmin, async (req, res) => {
         return res.json({ success: true, message: `Template '${name}' deleted from KV.` });
     } catch (err) {
         console.error('[template/delete]', err);
+        return res.status(500).json({ error: err.message });
+    }
+});
+
+// ── POST /api/template/prune ─────────────────────────────────────────────
+// Admin only: Removes old versions of templates and orphaned data from R2.
+router.post('/prune', requireAdmin, async (req, res) => {
+    try {
+        console.log('[prune] Starting R2 storage optimization...');
+        
+        // 1. Get all active templates from KV (The Truth)
+        const keys = await kvList('__tmpl__');
+        const activeTemplates = new Map();
+        for (const k of keys) {
+            const meta = await kvGet(k);
+            if (meta) activeTemplates.set(meta.name, meta.version);
+        }
+
+        // 2. List all objects in the templates/ directory in R2
+        const allObjects = await r2List('templates/');
+        const toDelete = [];
+
+        // 3. Identify residual data
+        for (const key of allObjects) {
+            // Path structure: templates/{name}/{version}/{file}
+            const parts = key.split('/');
+            if (parts.length < 4) continue;
+            
+            const name = parts[1];
+            const version = parts[2];
+            
+            const activeVersion = activeTemplates.get(name);
+            
+            // If template no longer exists in KV OR this version is not the active one
+            if (!activeVersion || activeVersion !== version) {
+                toDelete.push(key);
+            }
+        }
+
+        console.log(`[prune] Identified ${toDelete.length} objects for deletion.`);
+        
+        // 4. Batch delete
+        if (toDelete.length > 0) {
+            await r2DeleteObjects(toDelete);
+        }
+
+        return res.json({
+            success: true,
+            message: `Storage optimization complete.`,
+            objectsDeleted: toDelete.length,
+            templatesPruned: Array.from(new Set(toDelete.map(k => k.split('/')[1])))
+        });
+    } catch (err) {
+        console.error('[template/prune]', err);
         return res.status(500).json({ error: err.message });
     }
 });

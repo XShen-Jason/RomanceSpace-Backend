@@ -3,7 +3,7 @@
  * Uses the S3-compatible API via @aws-sdk/client-s3.
  * Credentials (Access Key + Secret) are R2 API tokens, NOT the CF global token.
  */
-const { S3Client, PutObjectCommand, GetObjectCommand, ListObjectsV2Command } = require('@aws-sdk/client-s3');
+const { S3Client, PutObjectCommand, GetObjectCommand, ListObjectsV2Command, DeleteObjectCommand, DeleteObjectsCommand } = require('@aws-sdk/client-s3');
 const { getMime } = require('./mime');
 
 let _client;
@@ -75,4 +75,39 @@ async function r2List(prefix) {
     return (res.Contents ?? []).map((obj) => obj.Key);
 }
 
-module.exports = { r2Put, r2Get, r2List };
+/**
+ * Delete a single object from R2.
+ */
+async function r2Delete(key) {
+    const client = getClient();
+    await client.send(
+        new DeleteObjectCommand({ Bucket: process.env.CF_R2_BUCKET, Key: key })
+    );
+}
+
+/**
+ * Delete multiple objects from R2 (Max 1000 per call).
+ * @param {string[]} keys - Array of keys to delete.
+ */
+async function r2DeleteObjects(keys) {
+    if (!keys || keys.length === 0) return;
+    const client = getClient();
+    // Chunk keys into 1000s if necessary
+    const chunks = [];
+    for (let i = 0; i < keys.length; i += 1000) {
+        chunks.push(keys.slice(i, i + 1000));
+    }
+
+    for (const chunk of chunks) {
+        await client.send(
+            new DeleteObjectsCommand({
+                Bucket: process.env.CF_R2_BUCKET,
+                Delete: {
+                    Objects: chunk.map(k => ({ Key: k }))
+                }
+            })
+        );
+    }
+}
+
+module.exports = { r2Put, r2Get, r2List, r2Delete, r2DeleteObjects };
