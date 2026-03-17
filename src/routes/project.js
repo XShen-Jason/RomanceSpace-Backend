@@ -273,6 +273,7 @@ router.post('/config/update-user-tier', requireAdmin, async (req, res) => {
 
         if (error) throw error;
 
+        console.log(`[Admin] Updated user ${targetUserId} to tier "${tier}"`);
         return res.json({ success: true, message: `User tier successfully updated to ${tier}` });
     } catch (err) {
         console.error('[project/update-user-tier]', err);
@@ -515,7 +516,7 @@ router.get('/status/:userId', async (req, res) => {
         const today = new Date().toISOString().split('T')[0];
         const dailyUsedEdits = profile?.last_edit_date === today ? (profile?.daily_edit_count || 0) : 0;
 
-        return res.json({
+        const responseData = {
             success: true,
             data: {
                 tier,
@@ -528,8 +529,18 @@ router.get('/status/:userId', async (req, res) => {
                 maxDailyEdits,
                 minDomainLen,
                 allowHideFooter
+            },
+            _debug: {
+                timestamp: new Date().toISOString(),
+                dbTier: profile?.tier,
+                dbRole: profile?.role,
+                finalTier: tier,
+                userId,
+                instanceId: process.env.INSTANCE_ID || process.pid
             }
-        });
+        };
+
+        return res.json(responseData);
     } catch (err) {
         console.error('[project/status] Fatal Error', err);
         return res.status(500).json({ success: false, error: err.message });
