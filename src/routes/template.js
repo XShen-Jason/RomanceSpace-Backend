@@ -10,7 +10,7 @@ const path = require('path');
 const fs = require('fs');
 const { requireAdmin } = require('../middleware/auth');
 const { r2Put, r2Get } = require('../utils/r2');
-const { kvGet, kvPut, kvList } = require('../utils/kv');
+const { kvGet, kvPut, kvList, kvDelete } = require('../utils/kv');
 const { makeVersion } = require('../utils/mime');
 const { injectData } = require('../utils/html');
 
@@ -352,6 +352,34 @@ router.get('/raw/:name', async (req, res) => {
         return res.send(htmlBuf.toString('utf-8'));
     } catch (err) {
         console.error('[template/raw]', err);
+        return res.status(500).json({ error: err.message });
+    }
+});
+
+// ── DELETE /api/template/:name ──────────────────────────────────────────────
+// Admin only: Purge a template's metadata from KV
+router.delete('/:name', requireAdmin, async (req, res) => {
+    try {
+        const { name } = req.params;
+        const key = `__tmpl__${name}`;
+        
+        const existing = await kvGet(key);
+        if (!existing) {
+            return res.status(404).json({ error: `Template '${name}' not found` });
+        }
+
+        // We use kvDelete to properly remove the key from Cloudflare
+        await kvDelete(key);
+        
+        cachedTemplates = null;
+        if (typeof assetVersionCache !== 'undefined') {
+            assetVersionCache.delete(name);
+        }
+        await rebuildStaticTemplateList();
+        
+        return res.json({ success: true, message: `Template '${name}' deleted from KV.` });
+    } catch (err) {
+        console.error('[template/delete]', err);
         return res.status(500).json({ error: err.message });
     }
 });

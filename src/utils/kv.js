@@ -71,4 +71,16 @@ async function kvList(prefix = '') {
     return (json.result ?? []).map((k) => k.name);
 }
 
-module.exports = { kvGet, kvPut, kvList };
+/**
+ * Delete a KV key.
+ * @param {string} key
+ */
+async function kvDelete(key) {
+    const res = await fetch(`${kvBase()}/values/${encodeURIComponent(key)}`, {
+        method: 'DELETE',
+        headers: headers(),
+    });
+    if (!res.ok) throw new Error(`KV DELETE failed: ${res.status} ${await res.text()}`);
+}
+
+module.exports = { kvGet, kvPut, kvList, kvDelete };

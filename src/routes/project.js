@@ -470,6 +470,11 @@ router.get('/status/:userId', async (req, res) => {
         const { userId } = req.params;
         if (!userId) return res.status(400).json({ error: 'Missing userId' });
 
+        // Add headers to prevent caching of user status/quota
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+
         // 1. Fetch user tier and edit stats
         const { data: profile, error: profileErr } = await supabase
             .from('profiles')
