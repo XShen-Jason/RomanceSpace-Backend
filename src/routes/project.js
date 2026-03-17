@@ -469,6 +469,7 @@ router.get('/:subdomain', requireAdmin, async (req, res) => {
 router.get('/status/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
+        console.log(`[Status API] Request received for userId: ${userId} at ${new Date().toISOString()}`);
         if (!userId) return res.status(400).json({ error: 'Missing userId' });
 
         // Add headers to prevent caching of user status/quota
