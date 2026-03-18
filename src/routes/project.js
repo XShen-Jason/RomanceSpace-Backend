@@ -6,7 +6,7 @@
 const express = require('express');
 const { requireAdmin } = require('../middleware/auth');
 const { r2Put, r2Get } = require('../utils/r2');
-const { kvGet, kvPut } = require('../utils/kv');
+const { kvGet, kvPut, kvDelete } = require('../utils/kv');
 const { injectData } = require('../utils/html');
 const { purgeCacheUrls } = require('../utils/cache');
 const { supabase } = require('../utils/supabase'); // Added Supabase Client
@@ -412,6 +412,12 @@ async function renderProjectInternal({ subdomain, userId, type, data, showViralF
     }
 
     // 7. Push final static HTML to R2
+    // Inject a stable version tag before writing so the Worker can detect stale pages.
+    const versionTag = `<meta name="tmpl-version" content="${meta.version}">`;
+    const headMatchForVersion = rendered.match(/<head[^>]*>/i);
+    if (headMatchForVersion) {
+        rendered = rendered.replace(headMatchForVersion[0], `${headMatchForVersion[0]}\n    ${versionTag}`);
+    }
     await r2Put(`pages/${subdomain}/index.html`, Buffer.from(rendered, 'utf-8'), 'text/html;charset=UTF-8');
 
     // 8. Update KV Route
@@ -462,6 +468,58 @@ router.get('/:subdomain', requireAdmin, async (req, res) => {
     } catch (err) {
         console.error('[project/get]', err);
         return res.status(500).json({ error: err.message });
+    }
+});
+
+// ── POST /api/project/re-render/:subdomain ──────────────────────────────────
+// Internal endpoint called by Cloudflare Worker (via waitUntil) for lazy re-rendering.
+// A KV-based lock prevents concurrent storms when many users visit a stale page at once.
+router.post('/re-render/:subdomain', requireAdmin, async (req, res) => {
+    const { subdomain } = req.params;
+    const lockKey = `__rerender_lock__${subdomain}`;
+    try {
+        // Check lock: if another re-render is in progress, bail out immediately.
+        const lock = await kvGet(lockKey);
+        if (lock) {
+            return res.json({ success: false, reason: 'locked', message: `Re-render already in progress for ${subdomain}` });
+        }
+
+        // Fetch project data from Supabase
+        const { data: project, error } = await supabase
+            .from('projects')
+            .select('*, profiles(tier, role)')
+            .eq('subdomain', subdomain)
+            .maybeSingle();
+
+        if (error) throw error;
+        if (!project) return res.status(404).json({ success: false, message: 'Project not found' });
+
+        // Acquire lock (TTL 120s — CF minimum is 60s) before starting work
+        await kvPut(lockKey, '1', 120);
+
+        try {
+            const userTier = (project.profiles?.tier || project.profiles?.role || 'free').toLowerCase();
+            await ensureQuotas();
+            const tierConfig = memoryQuotas[userTier] || memoryQuotas['free'];
+
+            await renderProjectInternal({
+                subdomain: project.subdomain,
+                userId: project.user_id,
+                type: project.template_type,
+                data: project.data,
+                showViralFooter: project.show_viral_footer,
+                isUpdate: true,
+                tierConfig,
+            });
+            console.log(`[re-render/lazy] OK: ${subdomain}`);
+            return res.json({ success: true, message: `Re-rendered ${subdomain}` });
+        } finally {
+            // Always release lock immediately after work completes
+            await kvDelete(lockKey).catch(() => {}); // Non-fatal
+        }
+    } catch (err) {
+        console.error(`[re-render/lazy] Error for ${subdomain}:`, err.message);
+        return res.status(500).json({ success: false, error: err.message });
     }
 });
 

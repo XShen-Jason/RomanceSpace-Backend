@@ -105,78 +105,9 @@ async function commitToGitHub(templateName, files) {
     }
 }
 
-/**
- * Safely triggers an asynchronous re-render for all projects using a specific template.
- * Designed for 2h2g VPS: Sequential processing + Batching + Delays.
- */
-async function triggerBackgroundReRender(templateName) {
-    console.log(`[re-render] Scheduled re-render for projects using template: ${templateName}`);
-    
-    // Self-invoking async function to run in background
-    (async () => {
-        try {
-            let offset = 0;
-            const batchSize = 50;
-            let totalProcessed = 0;
-            let totalFailed = 0;
-
-            while (true) {
-                // 1. Fetch batch from Supabase (Joined with profiles for tier info)
-                const { data: projects, error } = await supabase
-                    .from('projects')
-                    .select('*, profiles(tier, role)')
-                    .eq('template_type', templateName)
-                    .range(offset, offset + batchSize - 1)
-                    .order('updated_at', { ascending: false });
-
-                if (error) {
-                    console.error(`[re-render] DB Fetch Error for ${templateName}:`, error.message);
-                    break;
-                }
-
-                if (!projects || projects.length === 0) break;
-
-                console.log(`[re-render] Processing batch of ${projects.length} users for ${templateName}...`);
-
-                // 2. Process sequentially to protect VPS CPU/Bandwidth
-                for (const project of projects) {
-                    try {
-                        // resolve tier config for this specific user
-                        const userTier = (project.profiles?.tier || project.profiles?.role || 'free').toLowerCase();
-                        const tierConfig = memoryQuotas[userTier] || memoryQuotas['free'];
-
-                        await renderProjectInternal({
-                            subdomain: project.subdomain,
-                            userId: project.user_id,
-                            type: project.template_type,
-                            data: project.data,
-                            showViralFooter: project.show_viral_footer,
-                            isUpdate: true,
-                            tierConfig: tierConfig
-                        });
-                        totalProcessed++;
-                    } catch (renderErr) {
-                        console.error(`[re-render] Failed for ${project.subdomain}:`, renderErr.message);
-                        totalFailed++;
-                    }
-                    
-                    // Delay between items (200ms = 5 pages per second max)
-                    await new Promise(resolve => setTimeout(resolve, 200)); 
-                }
-
-                if (projects.length < batchSize) break;
-                offset += batchSize;
-                
-                // Yield to event loop between batches
-                await new Promise(resolve => setImmediate(resolve));
-            }
-
-            console.log(`[re-render] FINISHED for ${templateName}. Success: ${totalProcessed}, Failed: ${totalFailed}`);
-        } catch (fatal) {
-            console.error(`[re-render] FATAL Background Error for ${templateName}:`, fatal.message);
-        }
-    })();
-}
+// NOTE: triggerBackgroundReRender has been removed.
+// Template updates now only bump the KV version stamp.
+// Stale pages are re-rendered on-demand (lazy) when users visit them via the Worker.
 
 // ── POST /api/template/upload ─────────────────────────────────────────────────
 router.post('/upload', requireAdmin, upload.any(), async (req, res) => {
@@ -252,10 +183,7 @@ router.post('/upload', requireAdmin, upload.any(), async (req, res) => {
             });
         }
 
-        // Trigger Auto Re-render for all existing users of this template
-        triggerBackgroundReRender(templateName).catch(err => {
-            console.error('[template/upload] Re-render trigger failed:', err);
-        });
+        // Version stamp already bumped in KV above — Worker will lazy re-render stale pages on demand.
 
         return res.json({
             success: true,
@@ -357,8 +285,7 @@ router.post('/sync-local', requireAdmin, async (req, res) => {
                 });
                 results.push({ name, version, source: 'github' });
 
-                // Trigger background re-render for existing users of this template
-                triggerBackgroundReRender(name).catch(err => console.error(`[sync/github] Re-render trigger failed for ${name}:`, err));
+                // Version stamp bumped in KV above — Worker lazy re-render handles stale pages.
             }
         } 
         // --- Option B: Fallback to Local Filesystem ---
@@ -421,8 +348,7 @@ router.post('/sync-local', requireAdmin, async (req, res) => {
                 });
                 results.push({ name, version, source: 'local' });
 
-                // Trigger background re-render
-                triggerBackgroundReRender(name).catch(err => console.error(`[sync/local] Re-render trigger failed for ${name}:`, err));
+                // Version stamp bumped in KV above — Worker lazy re-render handles stale pages.
             }
         } 
         else {

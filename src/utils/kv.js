@@ -42,10 +42,13 @@ async function kvGet(key) {
  * Write a value to KV. Value can be any JSON-serializable object or a string.
  * @param {string} key
  * @param {any} value
+ * @param {number} [ttlSeconds] Optional TTL in seconds (uses CF KV expiration_ttl)
  */
-async function kvPut(key, value) {
+async function kvPut(key, value, ttlSeconds) {
     const body = typeof value === 'string' ? value : JSON.stringify(value);
-    const res = await fetch(`${kvBase()}/values/${encodeURIComponent(key)}`, {
+    const url = new URL(`${kvBase()}/values/${encodeURIComponent(key)}`);
+    if (ttlSeconds && ttlSeconds > 60) url.searchParams.set('expiration_ttl', ttlSeconds);
+    const res = await fetch(url.toString(), {
         method: 'PUT',
         headers: {
             Authorization: `Bearer ${process.env.CF_API_TOKEN}`,
