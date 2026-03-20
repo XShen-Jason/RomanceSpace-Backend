@@ -293,7 +293,8 @@ router.post('/sync-local', requireAdmin, async (req, res) => {
                     const configJson = JSON.parse(content.toString('utf-8'));
                     const fields = configJson?.fields ?? [];
                     const isStatic = configJson?.static === true || fields.length === 0;
-                    const status = configJson?.status || 'active';
+                    // Keep existing status if present (e.g. if user set it to 'offline' in UI)
+                    const status = existingMeta?.status || configJson?.status || 'active';
 
                     await kvPut(`__tmpl__${name}`, {
                         ...existingMeta,
@@ -337,7 +338,8 @@ router.post('/sync-local', requireAdmin, async (req, res) => {
                 const title = configJson?.title || name;
                 const tier = configJson?.tier === 'pro' ? 'pro' : 'free';
                 const price = configJson?.price || 0;
-                const status = configJson?.status || 'active';
+                // Keep existing status if present
+                const status = existingMeta?.status || configJson?.status || 'active';
 
                 if (existingMeta && existingMeta.version) {
                     await enqueueGarbageCollection(name, existingMeta.version);
@@ -390,7 +392,8 @@ router.post('/sync-local', requireAdmin, async (req, res) => {
                     const configJson = JSON.parse(content.toString('utf-8'));
                     const fields = configJson?.fields ?? [];
                     const isStatic = configJson?.static === true || fields.length === 0;
-                    const status = configJson?.status || 'active';
+                    // Keep existing status if present
+                    const status = existingMeta?.status || configJson?.status || 'active';
 
                     await kvPut(`__tmpl__${name}`, {
                         ...existingMeta,
@@ -434,7 +437,8 @@ router.post('/sync-local', requireAdmin, async (req, res) => {
                 const title = configJson?.title || name;
                 const tier = configJson?.tier === 'pro' ? 'pro' : 'free';
                 const price = configJson?.price || 0;
-                const status = configJson?.status || 'active';
+                // Keep existing status if present
+                const status = existingMeta?.status || configJson?.status || 'active';
 
                 if (existingMeta && existingMeta.version) {
                     await enqueueGarbageCollection(name, existingMeta.version);
