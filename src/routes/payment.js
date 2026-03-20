@@ -68,9 +68,19 @@ router.post('/create', async (req, res) => {
         if (existingOrder) {
             console.log(`[payment/create] Reusing pending order ${existingOrder.order_no} for user ${userId}`);
             // Generate real ZhifuFM payUrl via startOrder with existingOrder.order_no
-            const payUrl = await requestZhifuFmUrl(existingOrder.order_no, existingOrder.actual_amount, payType);
-            if (!payUrl) return res.status(500).json({ success: false, error: 'Failed to retrieve payment url from gateway' });
-            return res.json({ success: true, order_no: existingOrder.order_no, payUrl });
+            const zfmRes = await requestZhifuFmUrl(existingOrder.order_no, existingOrder.actual_amount, payType);
+            if (!zfmRes.success) {
+                return res.status(400).json({ 
+                    success: false, 
+                    error: `Failed to retrieve payment url: ${zfmRes.msg || 'Unknown gateway error'}` 
+                });
+            }
+            return res.json({ 
+                success: true, 
+                order_no: existingOrder.order_no, 
+                payUrl: zfmRes.payUrl,
+                amount: existingOrder.actual_amount
+            });
         }
 
         // 2. Fetch Pricing Configs
