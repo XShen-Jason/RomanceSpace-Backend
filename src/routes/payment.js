@@ -502,7 +502,7 @@ router.get('/admin/pricing', requireAdminKey, async (req, res) => {
  */
 router.post('/admin/pricing', requireAdminKey, async (req, res) => {
     try {
-        const { id, tier, duration_months, display_name, base_price, first_month_price, renewal_price, discount_label, is_active, sort_order } = req.body;
+        const { id, tier, duration_months, display_name, base_price, first_month_price, renewal_price, discount_label, is_active, allow_renewal, sort_order } = req.body;
         
         if (!tier || duration_months == null || base_price == null) {
             return res.status(400).json({ success: false, error: 'Missing required fields: tier, duration_months, base_price' });
@@ -531,6 +531,7 @@ router.post('/admin/pricing', requireAdminKey, async (req, res) => {
             renewal_price: parseCents(renewal_price),
             discount_label: discount_label || null,
             is_active: is_active !== undefined ? Boolean(is_active) : true,
+            allow_renewal: allow_renewal !== undefined ? Boolean(allow_renewal) : true,
             sort_order: sort_order ? parseInt(sort_order) : 0,
             updated_at: new Date().toISOString()
         };
