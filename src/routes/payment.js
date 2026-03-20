@@ -104,7 +104,10 @@ router.post('/create', async (req, res) => {
             .eq('id', userId)
             .maybeSingle();
         
-        const isRenewal = profile && profile.tier && profile.tier.toLowerCase() === tier.toLowerCase();
+        const isRenewal = profile && 
+                         profile.tier === tier && 
+                         profile.subscription_expires_at && 
+                         new Date(profile.subscription_expires_at) > new Date();
 
         let actualAmount;
         if (isRenewal) {
