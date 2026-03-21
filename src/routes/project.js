@@ -164,7 +164,7 @@ async function validateAndCheckQuota(userId, subdomain, template) {
         .select('id', { count: 'exact', head: true })
         .eq('invited_by', userId);
 
-    const maxDomains = (tierConfig?.limit || 1) + (inviteCount || 0);
+    const maxDomains = (tierConfig?.limit || 1) + (inviteCount || 0) + (profile?.invited_by ? 1 : 0);
     const existingProject = userProjects?.find(p => p.subdomain === subLow);
     const today = new Date().toISOString().split('T')[0];
 
@@ -751,7 +751,7 @@ router.get('/status/:userId', async (req, res) => {
 
         await ensureQuotas();
         const tierConfig = memoryQuotas[tier] || memoryQuotas['free'];
-        const maxDomains = (tierConfig?.limit ?? 1) + (inviteCount || 0);
+        const maxDomains = (tierConfig?.limit ?? 1) + (inviteCount || 0) + (profile?.invited_by ? 1 : 0);
         const maxDailyEdits = tierConfig?.dailyLimit ?? 5;
         const minDomainLen = tierConfig?.minDomainLen ?? 3;
         const allowHideFooter = tierConfig?.allowHideFooter ?? false;
