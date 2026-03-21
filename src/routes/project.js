@@ -36,7 +36,7 @@ const QUOTA_DEFAULTS = {
     },
     'pro': { 
         limit: 3, dailyLimit: 10, minDomainLen: 3, allowHideFooter: true, label: '💎 高级会员',
-        bg: 'linear-gradient(135deg, #f43f5e, #e11d48)', color: '#fff',
+        bg: 'linear-gradient(135deg, #f43f5e, #e11d48)', color: '#fff', accentColor: '#e11d48',
         features: [
             { text: '100% 模板库自由切换', active: true },
             { text: '3 个专属域名配额', active: true },
@@ -48,7 +48,7 @@ const QUOTA_DEFAULTS = {
     },
     'partner': { 
         limit: 15, dailyLimit: 100, minDomainLen: 1, allowHideFooter: true, label: '👑 终身合伙人',
-        bg: 'linear-gradient(135deg, #7c3aed, #4f46e5)', color: '#fff',
+        bg: 'linear-gradient(135deg, #7c3aed, #4f46e5)', color: '#fff', accentColor: '#7c3aed',
         features: [
             { text: '100% 模板库自由切换', active: true },
             { text: '15 个专属域名配额', active: true },
@@ -58,7 +58,7 @@ const QUOTA_DEFAULTS = {
             { text: '支持绑定个人顶级域名', active: true }
         ]
     },
-    'admin': { limit: 999, dailyLimit: 999, minDomainLen: 1, allowHideFooter: true, label: '🛡️ 系统管理员', bg: '#1e293b', color: '#fbbf24', features: [] }
+    'admin': { limit: 999, dailyLimit: 999, minDomainLen: 1, allowHideFooter: true, label: '🛡️ 系统管理员', bg: '#1e293b', color: '#fbbf24', accentColor: '#fbbf24', features: [] }
 };
 
 let memoryQuotas = { ...QUOTA_DEFAULTS };

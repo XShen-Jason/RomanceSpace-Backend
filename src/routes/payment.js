@@ -60,6 +60,7 @@ router.get('/pricing', async (req, res) => {
                 is_returning: isReturning,
                 bg: tierConfig.bg,
                 color: tierConfig.color,
+                accentColor: tierConfig.accentColor, // Add for specific UI elements
                 features: tierConfig.features,
                 limit: tierConfig.limit // Add for frontend sorting/display
             };
