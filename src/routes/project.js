@@ -411,8 +411,60 @@ router.post('/render', async (req, res) => {
         });
 
     } catch (err) {
-        console.error('[project/render Fatal Error]', err);
-        return res.status(500).json({ code: 5000, message: '服务器内部渲染错误', error: err.message, data: null });
+        console.error('[project/render] Fatal Error:', err);
+        return res.status(500).json({ code: 5000, message: 'Server error: ' + err.message });
+    }
+});
+
+// ── GET /api/project/check-domain ────────────────────────────────────────────
+// High-frequency endpoint for typing debounce, with 5-minute memory cache
+const domainStatusCache = new Map(); // Map<domain, { isTaken: boolean, timestamp: number }>
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+router.get('/check-domain', async (req, res) => {
+    try {
+        const domain = (req.query.domain || '').trim().toLowerCase();
+        if (!domain) return res.json({ available: false, message: '请输入域名' });
+
+        // 1. Fast Blocklist Check
+        await ensureBlocklist();
+        if (memoryBlocklist.includes(domain)) {
+            return res.json({ available: false, message: '该域名为系统保留字或暂不开放使用' });
+        }
+
+        // 2. Local Memory TTL Cache Check
+        const cached = domainStatusCache.get(domain);
+        if (cached && (Date.now() - cached.timestamp < CACHE_TTL_MS)) {
+            if (cached.isTaken) {
+                return res.json({ available: false, message: '已被其他用户抢注啦，换一个更特别的吧~' });
+            }
+            return res.json({ available: true, message: '🎉 可以使用！' });
+        }
+
+        // 3. Database Check (Only if cache miss or expired)
+        const { data: existingSameDomain, error: existErr } = await supabase
+            .from('projects')
+            .select('user_id')
+            .eq('subdomain', domain)
+            .limit(1)
+            .maybeSingle();
+
+        if (existErr) throw new Error('Supabase Check Error: ' + existErr.message);
+
+        const isTaken = !!existingSameDomain;
+        
+        // 4. Update Cache
+        domainStatusCache.set(domain, { isTaken, timestamp: Date.now() });
+
+        if (isTaken) {
+            return res.json({ available: false, message: '已被其他用户抢注啦，换一个更特别的吧~' });
+        }
+        
+        return res.json({ available: true, message: '🎉 可以使用！' });
+
+    } catch (err) {
+        console.error('[project/check-domain] Error:', err);
+        return res.status(500).json({ available: false, message: '网络波动，稍后再试' });
     }
 });
 
