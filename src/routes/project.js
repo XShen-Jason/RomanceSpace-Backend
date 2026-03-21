@@ -412,7 +412,9 @@ router.post('/render', async (req, res) => {
             data,
             showViralFooter,
             isUpdate: (authCheck.mode === 'UPDATE'),
-            tierConfig: authCheck.tierConfig
+            tierConfig: authCheck.tierConfig,
+            dailyCount: authCheck.dailyCount,
+            today: authCheck.today
         });
 
         return res.status(200).json({
@@ -484,7 +486,7 @@ router.get('/check-domain', async (req, res) => {
 /**
  * Core rendering logic extracted for background re-renders.
  */
-async function renderProjectInternal({ subdomain, userId, type, data, showViralFooter, isUpdate, tierConfig }) {
+async function renderProjectInternal({ subdomain, userId, type, data, showViralFooter, isUpdate, tierConfig, dailyCount, today }) {
     // 1. Force viral footer if tier doesn't allow hiding it
     const allowHide = tierConfig?.allowHideFooter ?? false;
     const finalShowViralFooter = allowHide ? (showViralFooter !== false) : true;
@@ -587,6 +589,21 @@ async function renderProjectInternal({ subdomain, userId, type, data, showViralF
 
     if (upsertErr) {
         console.error('[Supabase Upsert Error]:', upsertErr);
+    }
+
+    // 9.5 Increment Daily Edit Quota
+    if (isUpdate && dailyCount !== undefined && today) {
+        const { error: profileErr } = await supabase
+            .from('profiles')
+            .update({ 
+                daily_edit_count: dailyCount + 1,
+                last_edit_date: today
+            })
+            .eq('id', userId);
+        
+        if (profileErr) {
+            console.error('[Supabase Profile Update Error (Quota)]:', profileErr);
+        }
     }
 
     // 10. Purge cache
