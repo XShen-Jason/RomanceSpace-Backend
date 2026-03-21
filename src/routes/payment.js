@@ -60,7 +60,8 @@ router.get('/pricing', async (req, res) => {
                 is_returning: isReturning,
                 bg: tierConfig.bg,
                 color: tierConfig.color,
-                features: tierConfig.features
+                features: tierConfig.features,
+                limit: tierConfig.limit // Add for frontend sorting/display
             };
         });
 
