@@ -79,27 +79,27 @@ router.get('/pricing', async (req, res) => {
  */
 router.post('/create', async (req, res) => {
     try {
-        const { userId, tier, duration_months, payType } = req.body;
+        const { userId, configId, tier, duration_months, payType } = req.body;
         
-        if (!userId || !tier || !duration_months) {
-            return res.status(400).json({ success: false, error: "Missing required fields: userId, tier, duration_months" });
+        if (!userId || (!configId && (!tier || !duration_months))) {
+            return res.status(400).json({ success: false, error: "Missing required fields: userId, configId or (tier + duration_months)" });
         }
 
-        const cleanDurationMonths = parseInt(duration_months);
-        if (isNaN(cleanDurationMonths)) {
-            return res.status(400).json({ success: false, error: "duration_months must be a number" });
-        }
+        const cleanDurationMonths = duration_months ? parseInt(duration_months) : null;
 
         // 1. Fetch Pricing Configs
-        const { data: config, error: configErr } = await supabase
-            .from('pricing_configs')
-            .select('*')
-            .eq('tier', tier)
-            .eq('duration_months', cleanDurationMonths)
-            .eq('is_active', true)
-            .maybeSingle();
+        let query = supabase.from('pricing_configs').select('*').eq('is_active', true);
+        
+        if (configId) {
+            query = query.eq('id', configId);
+        } else {
+            query = query.eq('tier', tier).eq('duration_months', cleanDurationMonths);
+        }
+
+        const { data: config, error: configErr } = await query.maybeSingle();
 
         if (configErr || !config) {
+            console.error('[Payment] Pricing lookup failed:', configErr || 'No config found');
             return res.status(400).json({ success: false, error: 'Invalid or inactive pricing tier' });
         }
 
