@@ -141,17 +141,27 @@ pm2 startup
 
 如果你打算二次开发其他客户端，可直接调用此服务：
 
-| Method | Path | Auth 鉴权请求头 | 功能描述 |
-|--------|------|------|-------------|
-| GET | `/health` | — | 心跳检查，供 Nginx/云监控确保服务存活 |
-| POST | `/api/template/refresh-gallery` | `X-Admin-Key` | 重写 templates.json 并刷新全网 CDN 缓存 |
-| POST | `/api/project/config/sync-all` | `X-Admin-Key` | 整合同步：刷新 VPS 的等级配额与黑名单内存 |
-| POST | `/api/template/upload` | `X-Admin-Key` | 手动以文件形式强制将本地模板注入到 R2 对象库 |
-| GET | `/api/template/list` | — | 无验证：前端拉入图库列表（支持 CDN 强缓存）  |
-| GET | `/api/template/preview/:name` | — | 无验证：利用 `config.json` 预加载展示默认参数的演示页面 |
-| POST | `/api/project/render` | `X-Admin-Key` | 网页建造机：核心功能，执行渲染流程并注册 KV 域名路由 |
-| GET | `/api/project/:subdomain` | `X-Admin-Key` | 精确查询并提取 KV 路由内储藏的该用户的定制记录数据 |
-
+| 分类 | Method | Path | Auth 鉴权 | 功能描述 |
+| :--- | :--- | :--- | :--- | :--- |
+| **基础** | GET | `/health` | — | 系统心跳检查，供云监控确保服务存活 |
+| **模板** | GET | `/api/template/list` | — | 前端获取“模板大厅”列表（支持 CDN 缓存） |
+| | GET | `/api/template/preview/:name` | — | 渲染带默认参数的演示预览页面 |
+| | POST | `/api/template/refresh-gallery` | `Admin` | 重写 `templates.json` 并刷新全网 CDN |
+| | POST | `/api/template/upload` | `Admin` | 手动强制上传本地模板文件到 R2 存储桶 |
+| | POST | `/api/template/sync-local` | `Admin` | 一键从本地或 GitHub Sync 所有模板源 |
+| | POST | `/api/template/prune` | `Admin` | 存储优化：清理 R2 中 24h 前的冗余旧版文件 |
+| **项目** | POST | `/api/project/render` | — | **核心**：执行网页渲染流程并注册 KV 域名路由 |
+| | GET | `/api/project/status/:userId` | — | 获取用户当前等级、配额及今日修改剩余次数 |
+| | GET | `/api/project/check-domain` | — | 域名实时可用性校验（带 5min 内存缓存） |
+| | GET | `/api/project/:subdomain` | `Admin` | 精确查询并提取 KV 路由内存储的用户原始配置 |
+| | POST | `/api/project/config/sync-all` | `Admin` | 运维整合：同步刷新 VPS 内存中的配额与黑名单 |
+| **支付** | GET | `/api/payment/pricing` | — | 获取当前生效的会员等级定价方案（含优惠态） |
+| | POST | `/api/payment/create` | — | 发起支付：创建系统订单并获取支付网关链接 |
+| | ALL | `/api/payment/notify` | — | 支付回调：对接第三方网关 (ZhifuFM) 异步通知 |
+| | GET | `/api/payment/query` | — | 轮询接口：检查特定订单是否已支付成功 |
+| | GET | `/api/payment/admin/pricing` | `Admin` | 获取完整的定价配置清单（含已下架项） |
+| | POST | `/api/payment/admin/pricing` | `Admin` | 管理端逻辑：新增或修改定价策略内容 |
+| | POST | `/api/payment/admin/compensate`| `Admin` | 特权操作：手动为特定用户发放/补偿会员等级 |
 ### [附录] 终端 API 调用范例
 **上传模板 (`POST /api/template/upload`)：**
 ```bash
