@@ -148,9 +148,11 @@ async function sweepExpiredProjects() {
             const { count: inviteCount } = await supabase
                 .from('profiles')
                 .select('id', { count: 'exact', head: true })
-                .eq('invited_by', userId);
+                .eq('invited_by', userId)
+                .eq('invite_reward_claimed', true);
 
-            const maxDomains = (tierConfig?.limit || 1) + (inviteCount || 0);
+            const inviteBonusDomains = Math.min(2, Math.floor((inviteCount || 0) / 5));
+            const maxDomains = (tierConfig?.limit || 1) + inviteBonusDomains;
 
             if (userProjs.length > maxDomains) {
                 // Determine locked projects

@@ -124,9 +124,11 @@ async function isDomainActiveOrLocked(ownerId, domainName) {
     const { count: ownerInviteCount } = await supabase
         .from('profiles')
         .select('id', { count: 'exact', head: true })
-        .eq('invited_by', ownerId);
+        .eq('invited_by', ownerId)
+        .eq('invite_reward_claimed', true);
 
-    const ownerMaxDomains = (ownerTierConfig?.limit || 1) + (ownerInviteCount || 0);
+    const ownerInviteBonusDomains = Math.min(2, Math.floor((ownerInviteCount || 0) / 5));
+    const ownerMaxDomains = (ownerTierConfig?.limit || 1) + ownerInviteBonusDomains;
 
     const { data: ownerProjects } = await supabase
         .from('projects')
@@ -228,9 +230,11 @@ async function validateAndCheckQuota(userId, subdomain, template) {
     const { count: inviteCount } = await supabase
         .from('profiles')
         .select('id', { count: 'exact', head: true })
-        .eq('invited_by', userId);
+        .eq('invited_by', userId)
+        .eq('invite_reward_claimed', true);
 
-    const maxDomains = (tierConfig?.limit || 1) + (inviteCount || 0);
+    const inviteBonusDomains = Math.min(2, Math.floor((inviteCount || 0) / 5));
+    const maxDomains = (tierConfig?.limit || 1) + inviteBonusDomains;
     const existingProject = userProjects?.find(p => p.subdomain === subLow);
     const today = new Date().toISOString().split('T')[0];
 
@@ -830,11 +834,17 @@ router.get('/status/:userId', async (req, res) => {
         const { count: inviteCount } = await supabase
             .from('profiles')
             .select('id', { count: 'exact', head: true })
-            .eq('invited_by', userId);
+            .eq('invited_by', userId)
+            .eq('invite_reward_claimed', true);
 
         await ensureQuotas();
         const tierConfig = memoryQuotas[tier] || memoryQuotas['free'];
-        const maxDomains = (tierConfig?.limit ?? 1) + (inviteCount || 0);
+        
+        // 5人送1额度，10人送1额度，最多送2个额度
+        const inviteBonusDomains = Math.min(2, Math.floor((inviteCount || 0) / 5));
+        const inviteBonusDays = Math.min(10, (inviteCount || 0)) * 3;
+
+        const maxDomains = (tierConfig?.limit ?? 1) + inviteBonusDomains;
         const maxDailyEdits = tierConfig?.dailyLimit ?? 5;
         const minDomainLen = tierConfig?.minDomainLen ?? 3;
         const allowHideFooter = tierConfig?.allowHideFooter ?? false;
@@ -846,7 +856,7 @@ router.get('/status/:userId', async (req, res) => {
         const dailyUsedEdits = profile?.last_edit_date === today ? (profile?.daily_edit_count || 0) : 0;
 
         const baseLimit = tierConfig?.limit ?? 1;
-        const inviteBonus = inviteCount || 0;
+        const inviteBonus = inviteBonusDomains;
 
         const responseData = {
             success: true,
@@ -856,6 +866,8 @@ router.get('/status/:userId', async (req, res) => {
                 count,
                 baseLimit,
                 inviteBonus,
+                inviteBonusDays,
+                inviteCount: inviteCount || 0,
                 maxDomains,
                 isOverQuota: count > maxDomains,
                 activeProjectId: activeProjectSubdomain,
